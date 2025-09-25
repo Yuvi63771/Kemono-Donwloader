@@ -68,17 +68,13 @@
 <h2>License</h2>
 <p>This project is under the MIT Licence</p>
 <h2>Star History</h2>
-<table align="center" style="border-collapse: collapse; border: none; margin-left: auto; margin-right: auto;">
-  <tbody>
-    <tr>
-      <td align="center" valign="middle" style="padding: 10px; border: none;">
-        <a href="https://www.star-history.com/#Yuvi9587/Kemono-Downloader&amp;Date">
-          <img src="https://api.star-history.com/svg?repos=Yuvi9587/Kemono-Downloader&amp;type=Date" alt="Star History Chart" width="650">
-        </a>
-      </td>
-    </tr>
-  </tbody>
-</table>
+
+
+### Included Third-Party Tools
+
+This project includes a pre-compiled binary of `yt-dlp` for handling certain video downloads. `yt-dlp` is in the public domain. For more information or to get the latest version, please visit the official [yt-dlp GitHub repository](https://github.com/yt-dlp/yt-dlp).
+
+
 <p align="center">
   <a href="https://buymeacoffee.com/yuvi9587">
     <img src="https://img.shields.io/badge/🍺%20Buy%20Me%20a%20Coffee-FFCCCB?style=for-the-badge&amp;logoColor=black&amp;color=FFDD00" alt="Buy Me a Coffee">

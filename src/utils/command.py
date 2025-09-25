@@ -3,6 +3,8 @@ import re
 # Command constants
 CMD_ARCHIVE_ONLY = 'ao'
 CMD_DOMAIN_OVERRIDE_PREFIX = '.'
+CMD_SFP_PREFIX = 'sfp-'
+CMD_UNKNOWN = 'unknown' # New command constant
 
 def parse_commands_from_text(raw_text: str):
     """
@@ -10,28 +12,37 @@ def parse_commands_from_text(raw_text: str):
     and a dictionary of found commands.
 
     Commands are in the format [command].
-    Example: "Tifa, (Cloud, Zack) [.st] [ao]"
+    Example: "Tifa, (Cloud, Zack) [.st] [sfp-10] [unknown]"
 
     Returns:
         tuple[str, dict]: A tuple containing:
                           - The text string with commands removed.
                           - A dictionary of commands and their values.
-                            e.g., {'domain_override': 'st', 'archive_only': True}
     """
     command_pattern = re.compile(r'\[(.*?)\]')
     commands = {}
     
     def command_replacer(match):
-        command_str = match.group(1).strip()
+        command_str = match.group(1).strip().lower()
         
         if command_str.startswith(CMD_DOMAIN_OVERRIDE_PREFIX):
             tld = command_str[len(CMD_DOMAIN_OVERRIDE_PREFIX):]
-            if 'domain_override' not in commands: # Only take the first one
+            if 'domain_override' not in commands:
                 commands['domain_override'] = tld
-        elif command_str.lower() == CMD_ARCHIVE_ONLY:
+        elif command_str == CMD_ARCHIVE_ONLY:
             commands['archive_only'] = True
+        elif command_str.startswith(CMD_SFP_PREFIX):
+            try:
+                threshold_str = command_str[len(CMD_SFP_PREFIX):]
+                threshold = int(threshold_str)
+                if 'sfp_threshold' not in commands:
+                    commands['sfp_threshold'] = threshold
+            except (ValueError, IndexError):
+                pass
+        elif command_str == CMD_UNKNOWN: # Logic to handle the new command
+            commands['handle_unknown'] = True
             
-        return '' # Remove the command from the string
+        return ''
 
     text_without_commands = command_pattern.sub(command_replacer, raw_text).strip()
     

@@ -168,6 +168,7 @@ def match_folders_from_title(title, names_to_match, unwanted_keywords):
 def match_folders_from_filename_enhanced(filename, names_to_match, unwanted_keywords):
     """
     Matches folder names from a filename, prioritizing longer and more specific aliases.
+    It returns immediately after finding the first (longest) match.
 
     Args:
         filename (str): The filename to check.
@@ -175,15 +176,14 @@ def match_folders_from_filename_enhanced(filename, names_to_match, unwanted_keyw
         unwanted_keywords (set): A set of folder names to ignore.
 
     Returns:
-        list: A sorted list of matched primary folder names.
+        list: A list containing the single best folder name match, or an empty list.
     """
     if not filename or not names_to_match:
         return []
 
     filename_lower = filename.lower()
-    matched_primary_names = set()
 
-    # Create a flat list of (alias, primary_name) tuples to sort by alias length
+    # Create a flat list of (alias, primary_name) tuples
     alias_map_to_primary = []
     for name_obj in names_to_match:
         primary_name = name_obj.get("name")
@@ -200,8 +200,11 @@ def match_folders_from_filename_enhanced(filename, names_to_match, unwanted_keyw
     # Sort by alias length, descending, to match longer aliases first
     alias_map_to_primary.sort(key=lambda x: len(x[0]), reverse=True)
 
+    # <<< MODIFICATION: Return the FIRST match found, which will be the longest >>>
     for alias_lower, primary_name_for_alias in alias_map_to_primary:
-        if filename_lower.startswith(alias_lower):
-            matched_primary_names.add(primary_name_for_alias)
-
-    return sorted(list(matched_primary_names))
+        if alias_lower in filename_lower:
+            # Found the longest possible alias that is a substring. Return immediately.
+            return [primary_name_for_alias]
+            
+    # If the loop finishes without any matches, return an empty list.
+    return []

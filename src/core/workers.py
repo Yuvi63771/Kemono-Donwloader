@@ -128,7 +128,10 @@ class PostProcessorWorker:
                  domain_override=None,
                  archive_only_mode=False,  
                  manga_custom_filename_format="{published} {title}",
-                 manga_custom_date_format="YYYY-MM-DD" 
+                 manga_custom_date_format="YYYY-MM-DD" ,
+                 sfp_threshold=None,
+                 handle_unknown_mode=False,
+                  
                  ):
         self.post = post_data
         self.download_root = download_root
@@ -199,6 +202,8 @@ class PostProcessorWorker:
         self.skip_file_size_mb = skip_file_size_mb
         self.manga_custom_filename_format = manga_custom_filename_format 
         self.manga_custom_date_format = manga_custom_date_format 
+        self.sfp_threshold = sfp_threshold 
+        self.handle_unknown_mode = handle_unknown_mode 
 
 
         if self.compress_images and Image is None:
@@ -552,6 +557,26 @@ class PostProcessorWorker:
                     filename_to_save_in_main_path = modified_base_name + ext_for_removal
                 else:
                     filename_to_save_in_main_path = base_name_for_removal + ext_for_removal
+
+
+        MAX_PATH_LENGTH = 240  
+        
+        base_name, extension = os.path.splitext(filename_to_save_in_main_path)
+        
+        potential_full_path = os.path.join(target_folder_path, filename_to_save_in_main_path)
+        
+        if len(potential_full_path) > MAX_PATH_LENGTH:
+            excess_length = len(potential_full_path) - MAX_PATH_LENGTH
+            
+            if len(base_name) > excess_length:
+                truncated_base_name = base_name[:-excess_length]
+                
+                filename_to_save_in_main_path = truncated_base_name.strip() + extension
+                self.logger(f"   ⚠️ Path was too long. Truncating filename to: '{filename_to_save_in_main_path}'")
+            else:
+                name_hash = hashlib.md5(base_name.encode()).hexdigest()[:16]
+                filename_to_save_in_main_path = f"{name_hash}{extension}"
+                self.logger(f"   ⚠️ Path is extremely long. Hashing filename to: '{filename_to_save_in_main_path}'")
 
         if not self.download_thumbnails:
             is_img_type = is_image(api_original_filename)
@@ -1031,13 +1056,69 @@ class PostProcessorWorker:
             is_full_creator_download_no_char_filter = not self.target_post_id_from_initial_url and not current_character_filters
             
             if (self.show_external_links or self.extract_links_only):
+                unique_links_data = {}
+                links_emitted_count = 0
+
                 embed_data = post_data.get('embed')
                 if isinstance(embed_data, dict) and embed_data.get('url'):
                     embed_url = embed_data['url']
                     embed_subject = embed_data.get('subject', embed_url)
-                    platform = get_link_platform(embed_url)
-                    self.logger(f"   🔗 Found embed link: {embed_url}")
-                    self._emit_signal('external_link', post_title, embed_subject, embed_url, platform, "")
+                    unique_links_data[embed_url] = embed_subject
+
+                if post_content_html:
+                    try:
+                        # Stage 2: Find all clickable <a> tag links
+                        for match in link_pattern.finditer(post_content_html):
+                            link_url = html.unescape(match.group(1).strip())
+                            if not any(ext in link_url.lower() for ext in ['.css', '.js', '.ico', '.xml', '.svg']) and not link_url.startswith('javascript:'):
+                                clean_link_text = html.unescape(re.sub(r'<.*?>', '', match.group(2))).strip()
+                                unique_links_data[link_url] = clean_link_text if clean_link_text else "[Link]"
+
+                        # Stage 3: Find all plain-text URLs
+                        plain_text_content = strip_html_tags(post_content_html)
+                        plain_text_url_pattern = re.compile(r"""\b(https?://[^\s"'<>\[\]\{\}\|\^\\^~\[\]`]+)""", re.IGNORECASE)
+                        for match in plain_text_url_pattern.finditer(plain_text_content):
+                            link_url = html.unescape(match.group(1).strip())
+                            if link_url not in unique_links_data:
+                                unique_links_data[link_url] = "[Plain Text Link]"
+
+                        # Stage 4: Process all unique links found
+                        scraped_platforms = {'kemono', 'coomer', 'patreon'}
+                        for link_url, link_text in unique_links_data.items():
+                            platform = get_link_platform(link_url)
+                            decryption_key_found = ""
+                            if platform == 'mega':
+                                mega_key_pattern = re.compile(r'\b([a-zA-Z0-9_-]{43}|[a-zA-Z0-9_-]{22})\b')
+                                parsed_mega_url = urlparse(link_url)
+                                if parsed_mega_url.fragment:
+                                    potential_key_from_fragment = parsed_mega_url.fragment.split('!')[-1]
+                                    if mega_key_pattern.fullmatch(potential_key_from_fragment):
+                                        decryption_key_found = potential_key_from_fragment
+                                if not decryption_key_found and link_text:
+                                    key_match_in_text = mega_key_pattern.search(link_text)
+                                    if key_match_in_text:
+                                        decryption_key_found = key_match_in_text.group(1)
+                                if not decryption_key_found and self.extract_links_only and post_content_html:
+                                    key_match_in_content = mega_key_pattern.search(strip_html_tags(post_content_html))
+                                    if key_match_in_content:
+                                        decryption_key_found = key_match_in_content.group(1)
+                            
+                            final_link_url_to_emit = link_url
+                            if platform == 'mega' and decryption_key_found:
+                                parsed_url = urlparse(link_url)
+                                if decryption_key_found not in (parsed_url.fragment or ''):
+                                    base_url = link_url.split('#')[0]
+                                    final_link_url_to_emit = f"{base_url}#{decryption_key_found}"
+                                    self.logger(f"   ℹ️ Combined Mega link and key: {final_link_url_to_emit}")
+
+                            if platform not in scraped_platforms:
+                                self._emit_signal('external_link', post_title, link_text, final_link_url_to_emit, platform, "")
+                                links_emitted_count += 1
+                        if links_emitted_count > 0: self.logger(f"   🔗 Found {links_emitted_count} potential external link(s) in post content.")
+                    except Exception as e:
+                        self.logger(f"⚠️ Error parsing post content for links: {e}\n{traceback.format_exc(limit=2)}")
+                elif self.extract_links_only and not unique_links_data:
+                     self.logger(f"   ℹ️ Post {post_id} contains no text content to scan for links.")
             
             if is_full_creator_download_no_char_filter and self.creator_download_folder_ignore_words:
                 self.logger(f"   Applying creator download specific folder ignore words ({len(self.creator_download_folder_ignore_words)} words).")
@@ -1299,13 +1380,10 @@ class PostProcessorWorker:
                             if FPDF:
                                 self.logger(f"   Creating formatted PDF for {'comments' if self.text_only_scope == 'comments' else 'content'}...")
                                 pdf = PDF()
-                                if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-                                    base_path = sys._MEIPASS
-                                else:
-                                    base_path = self.project_root_dir
-
+                                base_path = self.project_root_dir
                                 font_path = ""
                                 bold_font_path = ""
+
                                 if base_path:
                                     font_path = os.path.join(base_path, 'data', 'dejavu-sans', 'DejaVuSans.ttf')
                                     bold_font_path = os.path.join(base_path, 'data', 'dejavu-sans', 'DejaVuSans-Bold.ttf')
@@ -1395,6 +1473,14 @@ class PostProcessorWorker:
                 self.logger(f"⚠️ Corrupt attachment data for post {post_id} (expected list, got {type(post_attachments)}). Skipping attachments.")
                 post_attachments = []
 
+            should_create_post_subfolder = self.use_post_subfolders
+
+            if (not self.use_post_subfolders and self.use_subfolders and 
+                self.sfp_threshold is not None and num_potential_files_in_post >= self.sfp_threshold):
+                
+                self.logger(f"   ℹ️ Post has {num_potential_files_in_post} files (≥{self.sfp_threshold}). Activating Subfolder per Post via [sfp] command.")
+                should_create_post_subfolder = True
+
             base_folder_names_for_post_content = []
             determined_post_save_path_for_history = self.override_output_dir if self.override_output_dir else self.download_root
             if not self.extract_links_only and self.use_subfolders:
@@ -1402,8 +1488,11 @@ class PostProcessorWorker:
                     result_tuple = (0, num_potential_files_in_post, [], [], [], None, None)
                     self._emit_signal('worker_finished', result_tuple)
                     return result_tuple
+                
                 primary_char_filter_for_folder = None
                 log_reason_for_folder = ""
+                known_name_match_found = False
+
                 if self.char_filter_scope == CHAR_SCOPE_COMMENTS and char_filter_that_matched_comment:
                     if post_is_candidate_by_file_char_match_in_comment_scope and char_filter_that_matched_file_in_comment_scope:
                         primary_char_filter_for_folder = char_filter_that_matched_file_in_comment_scope
@@ -1416,7 +1505,7 @@ class PostProcessorWorker:
                     log_reason_for_folder = "Matched char filter in title"
 
                 if primary_char_filter_for_folder:
-                    base_folder_names_for_post_content = [clean_folder_name(primary_char_filter_for_folder["name"])]
+                    known_name_match_found = True
                     cleaned_primary_folder_name = clean_folder_name(primary_char_filter_for_folder["name"])
                     if cleaned_primary_folder_name.lower() in effective_unwanted_keywords_for_folder_naming and cleaned_primary_folder_name.lower() != "untitled_folder":
                         self.logger(f"   ⚠️ Primary char filter folder name '{cleaned_primary_folder_name}' is in ignore list. Using generic name.")
@@ -1424,76 +1513,57 @@ class PostProcessorWorker:
                     else:
                         base_folder_names_for_post_content = [cleaned_primary_folder_name]
                     self.logger(f"   Base folder name(s) for post content ({log_reason_for_folder}): {', '.join(base_folder_names_for_post_content)}")
+                
                 elif not current_character_filters:
                     derived_folders_from_title_via_known_txt = match_folders_from_title(
-                        post_title,
-                        self.known_names,
-                        effective_unwanted_keywords_for_folder_naming
+                        post_title, self.known_names, effective_unwanted_keywords_for_folder_naming
                     )
-                    valid_derived_folders_from_title_known_txt = [
-                        name for name in derived_folders_from_title_via_known_txt
-                        if name and name.strip() and name.lower() != "untitled_folder"
-                    ]
+                    valid_derived_folders_from_title_known_txt = [name for name in derived_folders_from_title_via_known_txt if name and name.strip() and name.lower() != "untitled_folder"]
+                    
                     if valid_derived_folders_from_title_known_txt:
+                        known_name_match_found = True
                         first_match = valid_derived_folders_from_title_known_txt[0]
                         base_folder_names_for_post_content.append(first_match)
                         self.logger(f"   Base folder name for post content (First match from Known.txt & Title): '{first_match}'")
-                    else:
-                        candidate_name_from_title_basic_clean = extract_folder_name_from_title(
-                            post_title,
-                            FOLDER_NAME_STOP_WORDS
-                        )
-                        title_is_only_creator_ignored_words = False
-                        if candidate_name_from_title_basic_clean and candidate_name_from_title_basic_clean.lower() != "untitled_folder" and self.creator_download_folder_ignore_words:
-                            candidate_title_words = {word.lower() for word in candidate_name_from_title_basic_clean.split()}
-                            if candidate_title_words and candidate_title_words.issubset(self.creator_download_folder_ignore_words):
-                                title_is_only_creator_ignored_words = True
-                                self.logger(f"   Title-derived name '{candidate_name_from_title_basic_clean}' consists only of creator-specific ignore words.")
-                        if title_is_only_creator_ignored_words:
-                            self.logger(f"   Attempting Known.txt match on filenames as title was poor ('{candidate_name_from_title_basic_clean}').")
-                            filenames_to_check = [
-                                f_info['_original_name_for_log'] for f_info in all_files_from_post_api_for_char_check
-                                if f_info.get('_original_name_for_log')
-                            ]
-                            derived_folders_from_filenames_known_txt = set()
-                            if filenames_to_check:
-                                for fname in filenames_to_check:
-                                    matches = match_folders_from_title(
-                                        fname,
-                                        self.known_names,
-                                        effective_unwanted_keywords_for_folder_naming
-                                    )
-                                    for m in matches:
-                                        if m and m.strip() and m.lower() != "untitled_folder":
-                                            derived_folders_from_filenames_known_txt.add(m)
-                            if derived_folders_from_filenames_known_txt:
-                                first_match = sorted(list(derived_folders_from_filenames_known_txt))[0]
-                                base_folder_names_for_post_content.append(first_match)
-                                self.logger(f"   Base folder name for post content (First match from Known.txt & Filenames): '{first_match}'")
-                            else:
-                                final_title_extract = extract_folder_name_from_title(
-                                    post_title, effective_unwanted_keywords_for_folder_naming
-                                )
-                                base_folder_names_for_post_content.append(final_title_extract)
-                                self.logger(f"   No Known.txt match from filenames. Using title-derived name (with full ignore list): '{final_title_extract}'")
-                        else:
-                            extracted_name_from_title_full_ignore = extract_folder_name_from_title(
-                                post_title, effective_unwanted_keywords_for_folder_naming
+
+                    elif self.char_filter_scope == CHAR_SCOPE_BOTH:
+                        self.logger(f"   -> No folder match from title for post '{post_id}'. Checking filenames (Scope: Both)...")
+                        for file_info_for_fallback in all_files_from_post_api_for_char_check:
+                            filename_for_fallback = file_info_for_fallback.get('_original_name_for_log')
+                            if not filename_for_fallback:
+                                continue
+                            
+                            matched_folders_from_filename = match_folders_from_filename_enhanced(
+                                filename_for_fallback, self.known_names, effective_unwanted_keywords_for_folder_naming
                             )
-                            base_folder_names_for_post_content.append(extracted_name_from_title_full_ignore)
-                            self.logger(f"   Base folder name(s) for post content (Generic title parsing - title not solely creator-ignored words): {', '.join(base_folder_names_for_post_content)}")
-                    base_folder_names_for_post_content = [
-                        name for name in base_folder_names_for_post_content if name and name.strip()
-                    ]
-                    if not base_folder_names_for_post_content:
-                        final_fallback_name = clean_folder_name(post_title if post_title and post_title.strip() else "Generic Post Content")
-                        base_folder_names_for_post_content = [final_fallback_name]
-                        self.logger(f"   Ultimate fallback folder name: {final_fallback_name}")
+
+                            if matched_folders_from_filename:
+                                known_name_match_found = True
+                                first_match = matched_folders_from_filename[0]
+                                base_folder_names_for_post_content.append(first_match)
+                                self.logger(f"   Base folder name for post content (First match from Known.txt & Filename '{filename_for_fallback}'): '{first_match}'")
+                                break
+
+                if self.handle_unknown_mode and not known_name_match_found:
+                    self.logger(f"   ℹ️ [unknown] mode: No match in Known.txt. Creating parent folder from post title '{post_title}'.")
+                    
+                    post_title_as_folder = robust_clean_name(post_title)
+                    base_folder_names_for_post_content = [post_title_as_folder]
+                    
+                    should_create_post_subfolder = False 
+                
+                else:
+                    if not known_name_match_found:
+                        extracted_name_from_title_full_ignore = extract_folder_name_from_title(
+                            post_title, effective_unwanted_keywords_for_folder_naming
+                        )
+                        base_folder_names_for_post_content.append(extracted_name_from_title_full_ignore)
+                        self.logger(f"   Base folder name(s) for post content (Generic title parsing): {', '.join(base_folder_names_for_post_content)}")
 
                 if base_folder_names_for_post_content:
                     determined_post_save_path_for_history = os.path.join(determined_post_save_path_for_history, base_folder_names_for_post_content[0])
 
-            if not self.extract_links_only and self.use_post_subfolders:
+            if not self.extract_links_only and should_create_post_subfolder:
                 cleaned_post_title_for_sub = robust_clean_name(post_title)
                 max_folder_len = 100 
                 if len(cleaned_post_title_for_sub) > max_folder_len:
@@ -1605,62 +1675,10 @@ class PostProcessorWorker:
                         result_tuple = (0, num_potential_files_in_post, [], [], [], None, None)
                         return result_tuple
 
-            if (self.show_external_links or self.extract_links_only) and post_content_html:
-                if self._check_pause(f"External link extraction for post {post_id}"):
-                    result_tuple = (0, num_potential_files_in_post, [], [], [], None, None)
-                    return result_tuple
-                try:
-                    mega_key_pattern = re.compile(r'\b([a-zA-Z0-9_-]{43}|[a-zA-Z0-9_-]{22})\b')
-                    unique_links_data = {}
-                    for match in link_pattern.finditer(post_content_html):
-                        link_url = match.group(1).strip()
-                        link_url = html.unescape(link_url)
-                        link_inner_text = match.group(2)
-                        if not any(ext in link_url.lower() for ext in ['.css', '.js', '.ico', '.xml', '.svg']) and not link_url.startswith('javascript:') and link_url not in unique_links_data:
-                            clean_link_text = re.sub(r'<.*?>', '', link_inner_text)
-                            clean_link_text = html.unescape(clean_link_text).strip()
-                            display_text = clean_link_text if clean_link_text else "[Link]"
-                            unique_links_data[link_url] = display_text
-                    links_emitted_count = 0
-                    scraped_platforms = {'kemono', 'coomer', 'patreon'}
-                    for link_url, link_text in unique_links_data.items():
-                        platform = get_link_platform(link_url)
-                        decryption_key_found = ""
-                        if platform == 'mega':
-                            parsed_mega_url = urlparse(link_url)
-                            if parsed_mega_url.fragment:
-                                potential_key_from_fragment = parsed_mega_url.fragment.split('!')[-1]
-                                if mega_key_pattern.fullmatch(potential_key_from_fragment):
-                                    decryption_key_found = potential_key_from_fragment
-                            if not decryption_key_found and link_text:
-                                key_match_in_text = mega_key_pattern.search(link_text)
-                                if key_match_in_text:
-                                    decryption_key_found = key_match_in_text.group(1)
-                            if not decryption_key_found and self.extract_links_only and post_content_html:
-                                key_match_in_content = mega_key_pattern.search(strip_html_tags(post_content_html))
-                                if key_match_in_content:
-                                    decryption_key_found = key_match_in_content.group(1)
-                        
-                        final_link_url_to_emit = link_url
-                        # Combine the URL and key right here if a key was found separately
-                        if platform == 'mega' and decryption_key_found:
-                            parsed_url = urlparse(link_url)
-                            if decryption_key_found not in (parsed_url.fragment or ''):
-                                base_url = link_url.split('#')[0]
-                                final_link_url_to_emit = f"{base_url}#{decryption_key_found}"
-                                self.logger(f"   ℹ️ Combined Mega link and key: {final_link_url_to_emit}")
-
-                        if platform not in scraped_platforms:
-                            # Emit the complete URL and an empty key, as it's now part of the URL
-                            self._emit_signal('external_link', post_title, link_text, final_link_url_to_emit, platform, "")
-                            links_emitted_count += 1
-                    if links_emitted_count > 0: self.logger(f"   🔗 Found {links_emitted_count} potential external link(s) in post content.")
-                except Exception as e:
-                    self.logger(f"⚠️ Error parsing post content for links: {e}\n{traceback.format_exc(limit=2)}")
-
             if self.extract_links_only:
                 self.logger(f"   Extract Links Only mode: Finished processing post {post_id} for links.")
                 result_tuple = (0, 0, [], [], [], None, None)
+                self._emit_signal('worker_finished', result_tuple)
                 return result_tuple
 
             all_files_from_post_api = []
@@ -1764,12 +1782,10 @@ class PostProcessorWorker:
                     self.logger(f"      No additional image URLs found in post content scan for post {post_id}.")
 
             if self.archive_only_mode and not self.extract_links_only:
-                # Check if there's an archive and also other files
                 has_archive = any(is_archive(f.get('_original_name_for_log', '')) for f in all_files_from_post_api)
                 
                 if has_archive and len(all_files_from_post_api) > 1:
                     self.logger(f"   [AO] Archive found in post {post_id}. Prioritizing archive and skipping other files.")
-                    # Filter the list to keep ONLY archives
                     archives_only = [f for f in all_files_from_post_api if is_archive(f.get('_original_name_for_log', ''))]
                     
                     if archives_only:
@@ -1883,51 +1899,62 @@ class PostProcessorWorker:
                         total_skipped_this_post += 1
                         continue
 
-                    target_base_folders_for_this_file_iteration = []
-                    if current_character_filters:
-                        char_title_subfolder_name = None
-                        if self.target_post_id_from_initial_url and self.custom_folder_name:
-                            char_title_subfolder_name = self.custom_folder_name
-                        elif char_filter_info_that_matched_file:
-                            char_title_subfolder_name = clean_folder_name(char_filter_info_that_matched_file["name"])
+                    base_folder_for_this_file = ""
+                    known_name_match_found_for_this_file = False
+
+                    if self.use_subfolders:
+                        if char_filter_info_that_matched_file:
+                            base_folder_for_this_file = clean_folder_name(char_filter_info_that_matched_file["name"])
+                            known_name_match_found_for_this_file = True
                         elif char_filter_that_matched_title:
-                            char_title_subfolder_name = clean_folder_name(char_filter_that_matched_title["name"])
+                            base_folder_for_this_file = clean_folder_name(char_filter_that_matched_title["name"])
+                            known_name_match_found_for_this_file = True
                         elif char_filter_that_matched_comment:
-                            char_title_subfolder_name = clean_folder_name(char_filter_that_matched_comment["name"])
-                        if char_title_subfolder_name:
-                            target_base_folders_for_this_file_iteration.append(char_title_subfolder_name)
+                            base_folder_for_this_file = clean_folder_name(char_filter_that_matched_comment["name"])
+                            known_name_match_found_for_this_file = True
                         else:
-                            self.logger(f"⚠️ File '{current_api_original_filename}' candidate by char filter, but no folder name derived. Using post title.")
-                            target_base_folders_for_this_file_iteration.append(clean_folder_name(post_title))
-                    else:
-                        if base_folder_names_for_post_content:
-                            target_base_folders_for_this_file_iteration.extend(base_folder_names_for_post_content)
-                        else:
-                            target_base_folders_for_this_file_iteration.append(clean_folder_name(post_title))
+                            title_folders = match_folders_from_title(post_title, self.known_names, effective_unwanted_keywords_for_folder_naming)
+                            if title_folders:
+                                base_folder_for_this_file = title_folders[0]
+                                known_name_match_found_for_this_file = True
+                            else:
+                                filename_folders = match_folders_from_filename_enhanced(current_api_original_filename, self.known_names, effective_unwanted_keywords_for_folder_naming)
+                                if filename_folders:
+                                    base_folder_for_this_file = filename_folders[0]
+                                    known_name_match_found_for_this_file = True
 
-                    if not target_base_folders_for_this_file_iteration:
-                        target_base_folders_for_this_file_iteration.append(clean_folder_name(post_title if post_title else "Uncategorized_Post_Content"))
+                        if not known_name_match_found_for_this_file:
+                            if self.handle_unknown_mode: 
+                                self.logger(f"   ℹ️ [unknown] mode: No match in Known.txt for '{current_api_original_filename}'. Using post title for folder.")
+                                base_folder_for_this_file = robust_clean_name(post_title)
+                            else: 
+                                base_folder_for_this_file = extract_folder_name_from_title(post_title, effective_unwanted_keywords_for_folder_naming)
 
-                    for target_base_folder_name_for_instance in target_base_folders_for_this_file_iteration:
-                        current_path_for_file_instance = self.override_output_dir if self.override_output_dir else self.download_root
-                        if self.use_subfolders and target_base_folder_name_for_instance:
-                            current_path_for_file_instance = os.path.join(current_path_for_file_instance, target_base_folder_name_for_instance)
-                        if self.use_post_subfolders:
-                            current_path_for_file_instance = os.path.join(current_path_for_file_instance, final_post_subfolder_name)
+                    final_path_for_this_file = self.override_output_dir if self.override_output_dir else self.download_root
+                    if self.use_subfolders and base_folder_for_this_file:
+                        final_path_for_this_file = os.path.join(final_path_for_this_file, base_folder_for_this_file)
 
-                        manga_date_counter_to_pass = self.manga_date_file_counter_ref if self.manga_mode_active and self.manga_filename_style == STYLE_DATE_BASED else None
-                        manga_global_counter_to_pass = self.manga_global_file_counter_ref if self.manga_mode_active and self.manga_filename_style == STYLE_POST_TITLE_GLOBAL_NUMBERING else None
-                        folder_context_for_file = target_base_folder_name_for_instance if self.use_subfolders and target_base_folder_name_for_instance else clean_folder_name(post_title)
-
-                        futures_list.append(file_pool.submit(
-                            self._download_single_file,
-                            file_info=file_info_to_dl,
-                            target_folder_path=current_path_for_file_instance,
-                            post_page_url=post_page_url,  original_post_id_for_log=post_id, skip_event=self.skip_current_file_flag,
-                            post_title=post_title, manga_date_file_counter_ref=manga_date_counter_to_pass,
-                            manga_global_file_counter_ref=manga_global_counter_to_pass, folder_context_name_for_history=folder_context_for_file,
-                            file_index_in_post=file_idx, num_files_in_this_post=len(files_to_download_info_list)
-                        ))
+                    effective_spsp = should_create_post_subfolder
+                    if self.handle_unknown_mode and not known_name_match_found_for_this_file:
+                        effective_spsp = False
+                    
+                    if effective_spsp:
+                        final_path_for_this_file = os.path.join(final_path_for_this_file, final_post_subfolder_name)
+                    
+                    futures_list.append(file_pool.submit(
+                        self._download_single_file,
+                        file_info=file_info_to_dl,
+                        target_folder_path=final_path_for_this_file,
+                        post_page_url=post_page_url,
+                        original_post_id_for_log=post_id,
+                        skip_event=self.skip_current_file_flag,
+                        post_title=post_title,
+                        manga_date_file_counter_ref=self.manga_date_file_counter_ref,
+                        manga_global_file_counter_ref=self.manga_global_file_counter_ref,
+                        folder_context_name_for_history=base_folder_for_this_file,
+                        file_index_in_post=file_idx,
+                        num_files_in_this_post=len(files_to_download_info_list)
+                    ))
 
                 for future in as_completed(futures_list):
                     if self.check_cancel():
@@ -2017,12 +2044,10 @@ class PostProcessorWorker:
             if not self.extract_links_only and self.use_post_subfolders and total_downloaded_this_post == 0:
                 path_to_check_for_emptiness = determined_post_save_path_for_history
                 try:
-                    # Check if the path is a directory and if it's empty
                     if os.path.isdir(path_to_check_for_emptiness) and not os.listdir(path_to_check_for_emptiness):
                         self.logger(f"   🗑️ Removing empty post-specific subfolder: '{path_to_check_for_emptiness}'")
                         os.rmdir(path_to_check_for_emptiness)
                 except OSError as e_rmdir:
-                    # Log if removal fails for any reason (e.g., permissions)
                     self.logger(f"   ⚠️ Could not remove empty post-specific subfolder '{path_to_check_for_emptiness}': {e_rmdir}")
 
             result_tuple = (total_downloaded_this_post, total_skipped_this_post,
@@ -2116,7 +2141,8 @@ class DownloadThread(QThread):
                  domain_override=None, 
                  archive_only_mode=False, 
                  manga_custom_filename_format="{published} {title}",
-                 manga_custom_date_format="YYYY-MM-DD" 
+                 manga_custom_date_format="YYYY-MM-DD" ,
+                 sfp_threshold=None 
 
                  ): 
         super().__init__()
@@ -2191,6 +2217,7 @@ class DownloadThread(QThread):
         self.manga_custom_filename_format = manga_custom_filename_format 
         self.manga_custom_date_format = manga_custom_date_format     
         self.domain_override = domain_override 
+        self.sfp_threshold = sfp_threshold 
 
         if self.compress_images and Image is None:
             self.logger("⚠️ Image compression disabled: Pillow library not found (DownloadThread).")
@@ -2317,8 +2344,8 @@ class DownloadThread(QThread):
                         'domain_override': self.domain_override,
                         'archive_only_mode': self.archive_only_mode, 
                         'manga_custom_filename_format': self.manga_custom_filename_format,
-                        'manga_custom_date_format': self.manga_custom_date_format 
-
+                        'manga_custom_date_format': self.manga_custom_date_format,
+                        'sfp_threshold': self.sfp_threshold 
                     }
 
                     post_processing_worker = PostProcessorWorker(**worker_args)
