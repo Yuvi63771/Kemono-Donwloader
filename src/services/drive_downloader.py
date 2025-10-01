@@ -38,7 +38,6 @@ MEGA_API_URL = "https://g.api.mega.co.nz"
 MIN_SIZE_FOR_MULTIPART_MEGA = 20 * 1024 * 1024 # 20 MB
 NUM_PARTS_FOR_MEGA = 5
 
-# (Helper functions like _get_filename_from_headers, urlb64_to_b64, etc. remain the same)
 def _get_filename_from_headers(headers):
     cd = headers.get('content-disposition')
     if not cd:
@@ -99,7 +98,6 @@ def _process_file_key(file_key_bytes):
     return struct.pack('>' + 'I' * 4, *final_key_parts)
 
 def _download_and_decrypt_chunk(args):
-    # --- MODIFIED: Unpack new event arguments ---
     url, temp_path, start_byte, end_byte, key, nonce, part_num, progress_data, progress_callback_func, file_name, cancellation_event, pause_event = args
     try:
         headers = {'Range': f'bytes={start_byte}-{end_byte}'}
@@ -110,14 +108,12 @@ def _download_and_decrypt_chunk(args):
             r.raise_for_status()
             with open(temp_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
-                    # --- NEW: Pause and Cancel check ---
                     if cancellation_event and cancellation_event.is_set():
-                        return False # Signal failure
+                        return False 
                     while pause_event and pause_event.is_set():
                         time.sleep(0.5)
                         if cancellation_event and cancellation_event.is_set():
-                            return False # Signal failure
-                    # --- END NEW ---
+                            return False 
 
                     decrypted_chunk = cipher.decrypt(chunk)
                     f.write(decrypted_chunk)
@@ -159,7 +155,6 @@ def download_and_decrypt_mega_file(info, download_path, logger_func, progress_ca
                 last_update_time = time.time()
                 with open(final_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
-                        # --- NEW: Pause and Cancel check for single-part download ---
                         if cancellation_event and cancellation_event.is_set():
                             break
                         while pause_event and pause_event.is_set():
@@ -168,7 +163,6 @@ def download_and_decrypt_mega_file(info, download_path, logger_func, progress_ca
                                 break
                         if cancellation_event and cancellation_event.is_set():
                             break
-                        # --- END NEW ---
 
                         decrypted_chunk = cipher.decrypt(chunk)
                         f.write(decrypted_chunk)
@@ -202,12 +196,10 @@ def download_and_decrypt_mega_file(info, download_path, logger_func, progress_ca
         tasks = []
         for i, (start, end) in enumerate(chunks):
             temp_path = f"{final_path}.part{i}"
-            # --- MODIFIED: Add events to the task arguments ---
             tasks.append((dl_url, temp_path, start, end, key, nonce, i, progress_data, progress_callback_func, file_name, cancellation_event, pause_event))
 
         all_parts_successful = True
         with ThreadPoolExecutor(max_workers=NUM_PARTS_FOR_MEGA) as executor:
-            # Shutdown executor if cancellation is requested
             if cancellation_event and cancellation_event.is_set():
                 executor.shutdown(wait=False, cancel_futures=True)
                 all_parts_successful = False
@@ -340,7 +332,6 @@ def download_mega_file(mega_url, download_path, logger_func=print, progress_call
         def _download_worker(file_data):
             nonlocal processed_count
             try:
-                # Check for cancellation before starting a worker task
                 if cancellation_event and cancellation_event.is_set():
                     return
 
@@ -360,7 +351,6 @@ def download_mega_file(mega_url, download_path, logger_func=print, progress_call
                 file_specific_path = os.path.dirname(file_data['relative_path'])
                 final_download_dir = os.path.join(folder_download_path, file_specific_path)
                 
-                # --- MODIFIED: Pass events to the download function ---
                 download_and_decrypt_mega_file(file_info, final_download_dir, logger_func, progress_callback_func, cancellation_event, pause_event)
 
             except Exception as e:
@@ -375,7 +365,6 @@ def download_mega_file(mega_url, download_path, logger_func=print, progress_call
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = [executor.submit(_download_worker, file_data) for file_data in files]
-            # This part is tricky with cancellation, but the checks inside the worker are the most important
             for future in as_completed(futures):
                 if cancellation_event and cancellation_event.is_set():
                     # Attempt to cancel remaining futures
@@ -415,7 +404,6 @@ def download_mega_file(mega_url, download_path, logger_func=print, progress_call
             dl_temp_url = response_dl.json()[0]['g']
             file_info_obj = {'file_name': file_name, 'file_size': file_size, 'dl_url': dl_temp_url, 'file_key': file_key}
             
-            # --- MODIFIED: Pass events to the download function ---
             download_and_decrypt_mega_file(file_info_obj, download_path, logger_func, progress_callback_func, cancellation_event, pause_event)
             
             if overall_progress_callback: overall_progress_callback(1, 1)
@@ -509,13 +497,11 @@ def download_gdrive_file(url, download_path, logger_func=print, progress_callbac
 def download_dropbox_file(dropbox_link, download_path=".", logger_func=print, progress_callback_func=None, use_post_subfolder=False, post_title=None):
     logger_func(f"   [Dropbox] Attempting to download: {dropbox_link}")
 
-    # --- Subfolder Logic ---
     final_download_path = download_path
     if use_post_subfolder and post_title:
         subfolder_name = clean_folder_name(post_title)
         final_download_path = os.path.join(download_path, subfolder_name)
         logger_func(f"   [Dropbox] Using post subfolder: '{subfolder_name}'")
-    # --- End Subfolder Logic ---
 
     parsed_url = urlparse(dropbox_link)
     query_params = parse_qs(parsed_url.query)
@@ -689,7 +675,6 @@ def download_gofile_folder(gofile_url, download_path, logger_func=print, progres
             with download_session.get(file_url, stream=True, timeout=(60, 600)) as r:
                 r.raise_for_status()
                 
-                # --- NEW: Immediately update progress to 0% ---
                 if progress_callback_func:
                     progress_callback_func(filename, (0, file_size))
                 
@@ -705,7 +690,6 @@ def download_gofile_folder(gofile_url, download_path, logger_func=print, progres
                                 progress_callback_func(filename, (downloaded_bytes, file_size))
                             last_log_time = current_time
                 
-                # --- NEW: Immediately update progress to 100% on completion ---
                 if progress_callback_func:
                     progress_callback_func(filename, (file_size, file_size))
 

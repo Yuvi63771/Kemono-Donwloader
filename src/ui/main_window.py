@@ -3722,7 +3722,6 @@ class DownloaderApp (QWidget ):
 
         is_saint2_url = 'saint2.su' in api_url or 'saint2.pk' in api_url
         if is_saint2_url:
-            # First, check if it's the batch command. If so, do nothing here and let the next block handle it.
             if api_url.strip().lower() != 'saint2.su':
                 self.log_signal.emit("ℹ️ Saint2.su URL detected. Starting dedicated Saint2 download.")
                 self.set_ui_enabled(False)
@@ -4073,9 +4072,7 @@ class DownloaderApp (QWidget ):
                     elif self.discord_download_scope == 'files':
                         worker_args = {
                             'download_root': effective_output_dir_for_run, 'known_names': list(KNOWN_NAMES),
-                            # --- FIX IS ON THIS LINE ---
                             'filter_character_list': self._parse_character_filters(self.character_input.text().strip())[0],
-                            # --- END OF FIX ---
                             'emitter': self.worker_to_gui_queue, 'unwanted_keywords': FOLDER_NAME_STOP_WORDS,
                             'filter_mode': self.get_filter_mode(), 'skip_zip': self.skip_zip_checkbox.isChecked(),
                             'use_subfolders': self.use_subfolders_checkbox.isChecked(), 'use_post_subfolders': self.use_subfolder_per_post_checkbox.isChecked(),
