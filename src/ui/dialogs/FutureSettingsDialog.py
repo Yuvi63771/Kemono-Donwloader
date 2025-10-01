@@ -5,7 +5,6 @@ import sys
 
 # --- PyQt5 Imports ---
 from PyQt5.QtCore import Qt, QStandardPaths, QTimer
-from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
     QGroupBox, QComboBox, QMessageBox, QGridLayout, QCheckBox, QLineEdit
@@ -110,44 +109,30 @@ class CountdownMessageBox(QDialog):
             self.setStyleSheet("")
 
 class FutureSettingsDialog(QDialog):
-    def __init__(self, parent=None):
+    """
+    A dialog for managing application-wide settings like theme, language,
+    and display options, with an organized layout.
+    """
+    def __init__(self, parent_app_ref, parent=None):
         super().__init__(parent)
-        # This line is critical and must come first.
-        # It stores the reference to the main application window.
-        self.main_window = parent
-        
-        # --- Basic Dialog Setup ---
-        self.setWindowTitle("Settings")
-        self.setMinimumWidth(400)
-        
-        # --- Main Layout ---
-        main_layout = QVBoxLayout(self)
-        
-        # --- (Your other settings widgets go here) ---
-        # Example:
-        # theme_label = QLabel("Theme:", self)
-        # main_layout.addWidget(theme_label)
-        # ... and so on for your other settings ...
+        self.parent_app = parent_app_ref
+        self.setModal(True)
+        self.update_downloader_thread = None # To keep a reference
 
-        # --- Pixiv Token Button ---
-        # Create the button
-        self.get_pixiv_token_btn = QPushButton("Get Pixiv Refresh Token", self)
-        self.get_pixiv_token_btn.setToolTip(
-            "Opens a dialog to guide you through the Pixiv login process to get a token."
-        )
+        app_icon = get_app_icon_object()
+        if app_icon and not app_icon.isNull():
+            self.setWindowIcon(app_icon)
 
-        # Add the button to the layout
-        main_layout.addWidget(self.get_pixiv_token_btn)
+        screen_height = QApplication.primaryScreen().availableGeometry().height() if QApplication.primaryScreen() else 800
+        scale_factor = screen_height / 800.0
+        base_min_w, base_min_h = 420, 520 # Increased height for new options
+        scaled_min_w = int(base_min_w * scale_factor)
+        scaled_min_h = int(base_min_h * scale_factor)
+        self.setMinimumSize(scaled_min_w, scaled_min_h)
 
-        # Connect the button's signal to the function in the main window
-        self.get_pixiv_token_btn.clicked.connect(self.main_window._get_pixiv_token_from_user)
-
-        # --- OK/Cancel Buttons ---
-        # (Assuming you have standard OK/Cancel buttons)
-        # button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
-        # button_box.accepted.connect(self.accept)
-        # button_box.rejected.connect(self.reject)
-        # main_layout.addWidget(button_box)
+        self._init_ui()
+        self._retranslate_ui()
+        self._apply_theme()
 
     def _init_ui(self):
         """Initializes all UI components and layouts for the dialog."""
@@ -229,15 +214,6 @@ class FutureSettingsDialog(QDialog):
         self.ok_button = QPushButton()
         self.ok_button.clicked.connect(self.accept)
         main_layout.addWidget(self.ok_button, 0, Qt.AlignRight | Qt.AlignBottom)
-
-        self.get_pixiv_token_btn = QPushButton("Get Pixiv Refresh Token")
-        self.get_pixiv_token_btn.setToolTip("Opens a dialog to guide you through the Pixiv login process to get a token.")
-
-        # Add it to your layout
-        main_layout.addWidget(self.get_pixiv_token_btn) # Replace 'your_layout' with your actual layout name
-
-        # Connect the button's click signal to the function in the main window
-        self.get_pixiv_token_btn.clicked.connect(self.main_window._get_pixiv_token_from_user)
 
     def _retranslate_ui(self):
         self.setWindowTitle(self._tr("settings_dialog_title", "Settings"))
