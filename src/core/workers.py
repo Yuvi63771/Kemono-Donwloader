@@ -317,7 +317,6 @@ class PostProcessorWorker:
         if self._check_pause(f"File download prep for '{file_info.get('name', 'unknown file')}'"):
             return 0, 1, "", False, FILE_DOWNLOAD_STATUS_SKIPPED, None
         
-        # The rest of the function continues from here...
         file_download_headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
             'Referer': post_page_url,

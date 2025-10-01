@@ -6,7 +6,7 @@ from packaging.version import parse as parse_version
 from PyQt5.QtCore import QThread, pyqtSignal
 
 # Constants for the updater
-GITHUB_REPO_URL = "https://api.github.com/repos/Yuvi9587/Kemono-Downloader/releases/latest"
+GITHUB_REPO_URL = "https://api.github.com/repos/Yuvi63771/Kemono-Downloader/releases/latest"
 EXE_NAME = "Kemono.Downloader.exe"
 
 class UpdateChecker(QThread):

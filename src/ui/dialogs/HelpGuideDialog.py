@@ -172,7 +172,7 @@ class HelpGuideDialog(QDialog):
         icon_size = QSize(icon_dim, icon_dim)
         
         for button, tooltip_key, url in [
-            (self.github_button, "help_guide_github_tooltip", "https://github.com/Yuvi9587"),
+            (self.github_button, "help_guide_github_tooltip", "https://github.com/Yuvi63771/Kemono-Downloader"),
             (self.instagram_button, "help_guide_instagram_tooltip", "https://www.instagram.com/uvi.arts/"),
             (self.discord_button, "help_guide_discord_tooltip", "https://discord.gg/BqP64XTdJN")
         ]:

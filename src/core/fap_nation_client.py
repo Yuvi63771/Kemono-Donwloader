@@ -1,13 +1,13 @@
 import re
 import os
 import cloudscraper
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from ..utils.file_utils import clean_folder_name
 
 def fetch_fap_nation_data(album_url, logger_func):
     """
-    Scrapes a fap-nation page by checking for direct links, then searching
-    inside video iframes for HLS streams.
+    Scrapes a fap-nation page by prioritizing HLS streams first, then falling
+    back to direct download links. Selects the highest quality available.
     """
     logger_func(f"   [Fap-Nation] Fetching album data from: {album_url}")
     scraper = cloudscraper.create_scraper()
@@ -26,65 +26,85 @@ def fetch_fap_nation_data(album_url, logger_func):
         link_type = None
         filename_from_video_tag = None
 
-        # --- FINAL LOGIC ---
-
-        # A. Attempt to find a high-quality filename from the video player's configuration on the main page.
         video_tag_title_match = re.search(r'data-plyr-config=.*?&quot;title&quot;:.*?&quot;([^&]+?\.mp4)&quot;', html_content, re.IGNORECASE)
         if video_tag_title_match:
             filename_from_video_tag = clean_folder_name(video_tag_title_match.group(1))
             logger_func(f"   [Fap-Nation] Found high-quality filename in video tag: {filename_from_video_tag}")
 
-        # 1. Prioritize finding direct media links on the main page.
-        direct_link_pattern = r'<a\s+[^>]*href="([^"]+\.(?:mp4|webm|mkv|mov))"[^>]*>'
-        direct_links_found = re.findall(direct_link_pattern, html_content, re.IGNORECASE)
+        # --- REVISED LOGIC: HLS FIRST ---
 
-        if direct_links_found:
-            logger_func(f"   [Fap-Nation] Found {len(direct_links_found)} direct media link(s). Selecting the best quality...")
-            best_link = direct_links_found[0]
-            for link in direct_links_found:
-                if '1080p' in link.lower():
-                    best_link = link
-                    break
-            final_url = best_link
-            link_type = 'direct'
-            logger_func(f"   [Fap-Nation] Identified direct media link: {final_url}")
-        else:
-            # 2. Fallback: Search for an iframe and extract the HLS stream from it.
-            logger_func("   [Fap-Nation] No direct media links found. Searching for video iframe...")
-            
-            # This pattern specifically looks for the video provider's iframe
-            iframe_match = re.search(r'<iframe[^>]+src="([^"]+mediadelivery\.net[^"]+)"', html_content, re.IGNORECASE)
-            
-            if iframe_match:
-                iframe_url = iframe_match.group(1)
-                logger_func(f"   [Fap-Nation] Found video iframe. Visiting: {iframe_url}")
-                try:
-                    # Make a second request to the iframe's URL to get its content
-                    iframe_response = scraper.get(iframe_url, timeout=30)
-                    iframe_response.raise_for_status()
-                    iframe_html = iframe_response.text
-                    
-                    # Now search for the <source> tag INSIDE the iframe's HTML
-                    playlist_match = re.search(r'<source[^>]+src="([^"]+\.m3u8)"', iframe_html, re.IGNORECASE)
-                    if playlist_match:
-                        final_url = playlist_match.group(1)
-                        link_type = 'hls'
-                        logger_func(f"   [Fap-Nation] Found embedded HLS stream in iframe: {final_url}")
-
-                except Exception as e:
-                    logger_func(f"   [Fap-Nation] ⚠️ Error fetching or parsing iframe content: {e}")
-            
-            # 3. Final Fallback: If no iframe or iframe failed, check main page for a stream link.
-            if not final_url:
-                logger_func("   [Fap-Nation] No stream found in iframe. Checking main page content as a last resort...")
-                js_var_match = re.search(r'"(https?://[^"]+\.m3u8)"', html_content, re.IGNORECASE)
-                if js_var_match:
-                    final_url = js_var_match.group(1)
+        # 1. Prioritize finding an HLS stream.
+        logger_func("   [Fap-Nation] Priority 1: Searching for HLS stream...")
+        iframe_match = re.search(r'<iframe[^>]+src="([^"]+mediadelivery\.net[^"]+)"', html_content, re.IGNORECASE)
+        
+        if iframe_match:
+            iframe_url = iframe_match.group(1)
+            logger_func(f"   [Fap-Nation] Found video iframe. Visiting: {iframe_url}")
+            try:
+                iframe_response = scraper.get(iframe_url, timeout=30)
+                iframe_response.raise_for_status()
+                iframe_html = iframe_response.text
+                
+                playlist_match = re.search(r'<source[^>]+src="([^"]+\.m3u8)"', iframe_html, re.IGNORECASE)
+                if playlist_match:
+                    final_url = playlist_match.group(1)
                     link_type = 'hls'
-                    logger_func(f"   [Fap-Nation] Found HLS stream on main page: {final_url}")
+                    logger_func(f"   [Fap-Nation] Found embedded HLS stream in iframe: {final_url}")
+            except Exception as e:
+                logger_func(f"   [Fap-Nation] ⚠️ Error fetching or parsing iframe content: {e}")
+        
+        if not final_url:
+            logger_func("   [Fap-Nation] No stream found in iframe. Checking main page content as a last resort...")
+            js_var_match = re.search(r'"(https?://[^"]+\.m3u8)"', html_content, re.IGNORECASE)
+            if js_var_match:
+                final_url = js_var_match.group(1)
+                link_type = 'hls'
+                logger_func(f"   [Fap-Nation] Found HLS stream on main page: {final_url}")
+
+        # 2. Fallback: If no HLS stream was found, search for direct links.
+        if not final_url:
+            logger_func("   [Fap-Nation] No HLS stream found. Priority 2 (Fallback): Searching for direct download links...")
+            direct_link_pattern = r'<a\s+[^>]*href="([^"]+\.(?:mp4|webm|mkv|mov))"[^>]*>'
+            direct_links_found = re.findall(direct_link_pattern, html_content, re.IGNORECASE)
+
+            if direct_links_found:
+                logger_func(f"   [Fap-Nation] Found {len(direct_links_found)} direct media link(s). Selecting the best quality...")
+                best_link = direct_links_found[0]
+                for link in direct_links_found:
+                    if '1080p' in link.lower():
+                        best_link = link
+                        break
+                final_url = best_link
+                link_type = 'direct'
+                logger_func(f"   [Fap-Nation] Identified direct media link: {final_url}")
+
+        # If after all checks, we still have no URL, then fail.
+        if not final_url:
+            logger_func("   [Fap-Nation] ❌ Stage 1 Failed: Could not find any HLS stream or direct link.")
+            return None, []
+
+        # --- HLS Quality Selection Logic ---
+        if link_type == 'hls' and final_url:
+            logger_func("   [Fap-Nation] HLS stream found. Checking for higher quality variants...")
+            try:
+                master_playlist_response = scraper.get(final_url, timeout=20)
+                master_playlist_response.raise_for_status()
+                playlist_content = master_playlist_response.text
+
+                streams = re.findall(r'#EXT-X-STREAM-INF:.*?RESOLUTION=(\d+)x(\d+).*?\n(.*?)\s', playlist_content)
+                
+                if streams:
+                    best_stream = max(streams, key=lambda s: int(s[0]) * int(s[1]))
+                    height = best_stream[1]
+                    relative_path = best_stream[2]
+                    new_final_url = urljoin(final_url, relative_path)
+                    
+                    logger_func(f"   [Fap-Nation] ✅ Best quality found: {height}p. Updating URL to: {new_final_url}")
+                    final_url = new_final_url
                 else:
-                    logger_func("   [Fap-Nation] ❌ Stage 1 Failed: Could not find a direct link, iframe stream, or any embedded .m3u8 playlist.")
-                    return None, []
+                    logger_func("   [Fap-Nation] ℹ️ No alternate quality streams found in playlist. Using original.")
+            except Exception as e:
+                logger_func(f"   [Fap-Nation] ⚠️ Could not parse HLS master playlist for quality selection: {e}. Using original URL.")
 
         if final_url and link_type:
             if filename_from_video_tag:

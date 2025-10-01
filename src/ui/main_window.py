@@ -13,10 +13,12 @@ import datetime
 import requests
 import cloudscraper
 import unicodedata
+from urllib.parse import urlparse
 from collections import deque, defaultdict
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor ,CancelledError
 from urllib .parse import urlparse 
+
 from PyQt5.QtGui import QIcon, QIntValidator, QDesktopServices, QTextCharFormat
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QTextEdit, QPushButton,
@@ -31,7 +33,12 @@ except ImportError:
     Image = None
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSettings, QStandardPaths, QUrl, QSize, QProcess, QMutex, QMutexLocker, QCoreApplication
-from ..services.drive_downloader import download_mega_file as drive_download_mega_file ,download_gdrive_file ,download_dropbox_file 
+from ..services.drive_downloader import (
+    download_mega_file as drive_download_mega_file,
+    download_gdrive_file,
+    download_dropbox_file,
+    download_gofile_folder  
+)
 from ..core.workers import DownloadThread as BackendDownloadThread
 from ..services.multipart_downloader import download_file_in_parts, MULTIPART_DOWNLOADER_AVAILABLE
 from ..core.workers import PostProcessorWorker  
@@ -46,6 +53,8 @@ from ..core.saint2_client import fetch_saint2_data
 from ..core.erome_client import fetch_erome_data
 from ..core.Hentai2read_client import fetch_hentai2read_data
 from ..core.allcomic_client import get_chapter_list, fetch_chapter_data
+from ..core.toonily_client import get_chapter_list, fetch_chapter_data
+from ..core.pixeldrain_client import fetch_pixeldrain_data 
 from .assets import get_app_icon_object
 from ..config.constants import *
 from ..utils.file_utils import KNOWN_NAMES, clean_folder_name
@@ -303,7 +312,7 @@ class DownloaderApp (QWidget ):
         self.download_location_label_widget = None
         self.remove_from_filename_label_widget = None
         self.skip_words_label_widget = None
-        self.setWindowTitle("Kemono Downloader v7.3.0")
+        self.setWindowTitle("Kemono Downloader v7.4.0")
         setup_ui(self)
         self._connect_signals()
         if hasattr(self, 'character_input'):
@@ -923,7 +932,7 @@ class DownloaderApp (QWidget ):
     def _retranslate_main_ui (self ):
         """Retranslates static text elements in the main UI."""
         if self .url_label_widget :
-            self .url_label_widget .setText (self ._tr ("creator_post_url_label","🔗 Kemono Creator/Post URL:"))
+            self .url_label_widget .setText (self ._tr ("creator_post_url_label","URL:"))
         if self .download_location_label_widget :
             self .download_location_label_widget .setText (self ._tr ("download_location_label","📁 Download Location:"))
         if hasattr (self ,'character_label')and self .character_label :
@@ -1032,7 +1041,7 @@ class DownloaderApp (QWidget ):
             "Useful for cleaning up common prefixes/suffixes.\nExample: patreon, kemono, [HD], _final")))
 
         if hasattr (self ,'link_input'):
-            self .link_input .setPlaceholderText (self ._tr ("link_input_placeholder_text","e.g., https://kemono.su/patreon/user/12345 or .../post/98765"))
+            self .link_input .setPlaceholderText (self ._tr ("link_input_placeholder_text","e.g., https://kemono.su/patreon/user/12345 or .../post/98765, https://pixeldrain.com/u/V, https://saint2.su/embed/2H "))
             self .link_input .setToolTip (self ._tr ("link_input_tooltip_text","Enter the full URL..."))
         if hasattr (self ,'dir_input'):
             self .dir_input .setPlaceholderText (self ._tr ("dir_input_placeholder_text","Select folder where downloads will be saved"))
@@ -3491,7 +3500,36 @@ class DownloaderApp (QWidget ):
 
         api_url = direct_api_url if direct_api_url else self.link_input.text().strip()
 
+        platform = None
+        if 'mega.nz' in api_url or 'mega.io' in api_url:
+            platform = 'mega'
+        elif 'drive.google.com' in api_url:
+            platform = 'gdrive'
+        elif 'dropbox.com' in api_url:
+            platform = 'dropbox'
+        elif 'gofile.io' in api_url:
+            platform = 'gofile'
 
+        if platform:
+            main_ui_download_dir = self.dir_input.text().strip()
+            if not main_ui_download_dir or not os.path.isdir(main_ui_download_dir):
+                QMessageBox.critical(self, "Input Error", "A valid Download Directory is required.")
+                return False
+
+            self.set_ui_enabled(False)
+            use_post_subfolder = self.use_subfolder_per_post_checkbox.isChecked()
+            self.download_thread = DriveDownloadThread(
+                api_url, main_ui_download_dir, platform, use_post_subfolder,
+                self.cancellation_event, self.pause_event, self.log_signal.emit
+            )
+            self.download_thread.file_progress_signal.connect(self.update_file_progress_display)
+            self.download_thread.overall_progress_signal.connect(lambda total, processed: self.update_progress_display(total, processed, unit="files"))
+            self.download_thread.finished_signal.connect(
+                lambda dl, skip, cancelled, kept_names: self.download_finished(dl, skip, cancelled, kept_names)
+            )
+            self.download_thread.start()
+            self._update_button_states_and_connections()
+            return True
 
         if api_url.strip().lower() in ['allporncomic.com', 'https://allporncomic.com', 'http://allporncomic.com']:
             self.log_signal.emit("=" * 40)
@@ -3593,6 +3631,8 @@ class DownloaderApp (QWidget ):
             self.download_thread.start()
             self._update_button_states_and_connections()
             return True
+
+
 
         if 'nhentai.net' in api_url and not re.search(r'/g/(\d+)', api_url):
             self.log_signal.emit("=" * 40)
@@ -3839,6 +3879,7 @@ class DownloaderApp (QWidget ):
             
             return True
 
+
         if service == 'hentai2read':
             self.log_signal.emit("=" * 40)
             self.log_signal.emit(f"🚀 Detected Hentai2Read gallery: {id1}")
@@ -3892,6 +3933,19 @@ class DownloaderApp (QWidget ):
             self._update_button_states_and_connections()
             return True
 
+        if 'pixeldrain.com' in api_url:
+            self.log_signal.emit("ℹ️ Pixeldrain.com URL detected. Starting dedicated downloader.")
+            self.set_ui_enabled(False)
+
+            self.download_thread = PixeldrainDownloadThread(api_url, effective_output_dir_for_run, self)
+            self.download_thread.progress_signal.connect(self.handle_main_log)
+            self.download_thread.file_progress_signal.connect(self.update_file_progress_display)
+            self.download_thread.finished_signal.connect(
+                lambda dl, skip, cancelled: self.download_finished(dl, skip, cancelled, [])
+            )
+            self.download_thread.start()
+            self._update_button_states_and_connections()
+            return True
 
         if service == 'nhentai':
             gallery_id = id1
@@ -3913,6 +3967,21 @@ class DownloaderApp (QWidget ):
             self.download_thread.finished_signal.connect(
                 lambda dl, skip, cancelled: self.download_finished(dl, skip, cancelled, [])
             )
+            self.download_thread.start()
+            self._update_button_states_and_connections()
+            return True
+
+        if 'toonily.com' in api_url: # <-- ADD THIS BLOCK
+            self.log_signal.emit("ℹ️ Toonily.com URL detected. Starting dedicated Toonily download.")
+            self.set_ui_enabled(False)
+            
+            self.download_thread = ToonilyDownloadThread(api_url, effective_output_dir_for_run, self)
+            self.download_thread.progress_signal.connect(self.handle_main_log)
+            self.download_thread.file_progress_signal.connect(self.update_file_progress_display)
+            self.download_thread.finished_signal.connect(
+                lambda dl, skip, cancelled: self.download_finished(dl, skip, cancelled, [])
+            )
+            
             self.download_thread.start()
             self._update_button_states_and_connections()
             return True
@@ -5875,7 +5944,7 @@ class DownloaderApp (QWidget ):
         import os
         from datetime import datetime
         from ..core.workers import PostProcessorWorker, FILE_DOWNLOAD_STATUS_SUCCESS, FILE_DOWNLOAD_STATUS_SKIPPED
-        from urllib.parse import urlparse
+        
         from ..utils.text_utils import match_folders_from_title
         from ..core.workers import robust_clean_name
         from ..config.constants import (
@@ -6775,10 +6844,30 @@ class DownloaderApp (QWidget ):
         next_url =self .current_processing_favorite_item_info ['url']
         item_display_name =self .current_processing_favorite_item_info .get ('name','Unknown Item')
 
-        # --- START: MODIFIED SECTION ---
-        # Get the type of item from the queue to help start_download make smarter decisions.
+        # --- MODIFIED SECTION START ---
         item_type = self.current_processing_favorite_item_info.get('type', 'artist')
         self.log_signal.emit(f"▶️ Processing next favorite from queue ({item_type}): '{item_display_name}' ({next_url})")
+
+        # --- FIX: Check for Fap-Nation and use its dedicated thread ---
+        if 'fap-nation.com' in next_url or 'fap-nation.org' in next_url:
+            self.log_signal.emit("   (Fap-Nation batch item detected, using dedicated thread)")
+            output_dir = self.dir_input.text().strip()
+            use_post_subfolder = self.use_subfolder_per_post_checkbox.isChecked()
+            # This ensures the correct thread with the HLS-first logic is always used
+            self.download_thread = FapNationDownloadThread(next_url, output_dir, use_post_subfolder, self)
+            self.download_thread.progress_signal.connect(self.handle_main_log)
+            self.download_thread.file_progress_signal.connect(self.update_file_progress_display)
+            self.download_thread.overall_progress_signal.connect(
+                lambda total, processed: self.update_progress_display(total, processed, unit="files")
+            )
+            # When this thread finishes, it will automatically call _process_next_favorite_download
+            self.download_thread.finished_signal.connect(
+                lambda dl, skip, cancelled: self.download_finished(dl, skip, cancelled, [])
+            )
+            self.download_thread.start()
+            self._update_button_states_and_connections()
+            return # End processing for this item
+        # --- END OF FIX ---
 
         override_dir = None
         item_scope = self.current_processing_favorite_item_info.get('scope_from_popup')
@@ -6799,14 +6888,13 @@ class DownloaderApp (QWidget ):
             override_dir = os.path.normpath(os.path.join(main_download_dir, item_specific_folder_name))
             self.log_signal.emit(f"    Scope requires artist folder. Target directory: '{override_dir}'")
 
-        # Pass the item_type to the start_download function
         success_starting_download = self.start_download(
             direct_api_url=next_url,
             override_output_dir=override_dir,
             is_continuation=True,
             item_type_from_queue=item_type
         )
-        # --- END: MODIFIED SECTION ---
+        # --- END MODIFIED SECTION ---
 
         if not success_starting_download:
             self.log_signal.emit(f"⚠️ Failed to initiate download for '{item_display_name}'. Skipping and moving to the next item in queue.")
@@ -7465,10 +7553,125 @@ class AllcomicDownloadThread(QThread):
         self.is_cancelled = True
         self.progress_signal.emit("   Cancellation signal received by AllComic thread.")
 
+class ToonilyDownloadThread(QThread):
+    """A dedicated QThread for handling toonily.com series or single chapters."""
+    progress_signal = pyqtSignal(str)
+    file_progress_signal = pyqtSignal(str, object)
+    finished_signal = pyqtSignal(int, int, bool) 
+    overall_progress_signal = pyqtSignal(int, int) # Signal for chapter progress
+
+    def __init__(self, url, output_dir, parent=None):
+        super().__init__(parent)
+        self.start_url = url
+        self.output_dir = output_dir
+        self.is_cancelled = False
+        # Get access to the pause event from the main app
+        self.pause_event = parent.pause_event if hasattr(parent, 'pause_event') else threading.Event()
+
+    def _check_pause(self):
+        # Helper function to check for pause/cancel events
+        if self.is_cancelled: return True
+        if self.pause_event and self.pause_event.is_set():
+            self.progress_signal.emit("   Download paused...")
+            while self.pause_event.is_set():
+                if self.is_cancelled: return True
+                time.sleep(0.5)
+            self.progress_signal.emit("   Download resumed.")
+        return self.is_cancelled
+
+    def run(self):
+        grand_total_dl = 0
+        grand_total_skip = 0
+
+        # Check if the URL is a series or a chapter
+        if '/chapter-' in self.start_url:
+            # It's a single chapter URL
+            chapters_to_download = [self.start_url]
+            self.progress_signal.emit("ℹ️ Single Toonily chapter URL detected.")
+        else:
+            # It's a series URL, so get all chapters
+            chapters_to_download = get_chapter_list(self.start_url, self.progress_signal.emit)
+
+        if not chapters_to_download:
+            self.progress_signal.emit("❌ No chapters found to download.")
+            self.finished_signal.emit(0, 0, self.is_cancelled)
+            return
+
+        self.progress_signal.emit(f"--- Starting download of {len(chapters_to_download)} chapter(s) ---")
+        self.overall_progress_signal.emit(len(chapters_to_download), 0)
+        
+        scraper = cloudscraper.create_scraper()
+
+        for chapter_idx, chapter_url in enumerate(chapters_to_download):
+            if self._check_pause(): break
+            
+            self.progress_signal.emit(f"\n-- Processing Chapter {chapter_idx + 1}/{len(chapters_to_download)} --")
+            series_title, chapter_title, image_urls = fetch_chapter_data(chapter_url, self.progress_signal.emit, scraper)
+            
+            if not image_urls:
+                self.progress_signal.emit(f"❌ Failed to get data for chapter. Skipping.")
+                continue
+
+            # Create folders like: /Downloads/Series Name/Chapter 01/
+            series_folder_name = clean_folder_name(series_title)
+            # Make a safe folder name from the full chapter title
+            chapter_folder_name = clean_folder_name(chapter_title)
+            final_save_path = os.path.join(self.output_dir, series_folder_name, chapter_folder_name)
+            
+            try:
+                os.makedirs(final_save_path, exist_ok=True)
+                self.progress_signal.emit(f"   Saving to folder: '{os.path.join(series_folder_name, chapter_folder_name)}'")
+            except OSError as e:
+                self.progress_signal.emit(f"❌ Critical error creating directory: {e}")
+                grand_total_skip += len(image_urls)
+                continue
+
+            for i, img_url in enumerate(image_urls):
+                if self._check_pause(): break
+                
+                try:
+                    file_extension = os.path.splitext(urlparse(img_url).path)[1] or '.jpg'
+                    filename = f"{i+1:03d}{file_extension}"
+                    filepath = os.path.join(final_save_path, filename)
+
+                    if os.path.exists(filepath):
+                        self.progress_signal.emit(f"   -> Skip ({i+1}/{len(image_urls)}): '{filename}' already exists.")
+                        grand_total_skip += 1
+                    else:
+                        self.progress_signal.emit(f"   Downloading ({i+1}/{len(image_urls)}): '{filename}'...")
+                        response = scraper.get(img_url, stream=True, timeout=60, headers={'Referer': chapter_url})
+                        response.raise_for_status()
+                        
+                        with open(filepath, 'wb') as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if self._check_pause(): break
+                                f.write(chunk)
+                        
+                        if self._check_pause():
+                            if os.path.exists(filepath): os.remove(filepath)
+                            break
+                        
+                        grand_total_dl += 1
+                        time.sleep(0.2)
+                except Exception as e:
+                    self.progress_signal.emit(f"   ❌ Failed to download '{filename}': {e}")
+                    grand_total_skip += 1
+
+            self.overall_progress_signal.emit(len(chapters_to_download), chapter_idx + 1)
+            time.sleep(1) # Wait a second between chapters
+
+        self.file_progress_signal.emit("", None)
+        self.finished_signal.emit(grand_total_dl, grand_total_skip, self.is_cancelled)
+
+    def cancel(self):
+        self.is_cancelled = True
+        self.progress_signal.emit("   Cancellation signal received by Toonily thread.")
+
+
+
 class BunkrDownloadThread(QThread):
     """A dedicated QThread for handling Bunkr downloads."""
     progress_signal = pyqtSignal(str)
-    # --- ADD THIS SIGNAL for detailed file progress ---
     file_progress_signal = pyqtSignal(str, object)
     finished_signal = pyqtSignal(int, int, bool, list)
 
@@ -7539,7 +7742,6 @@ class BunkrDownloadThread(QThread):
                 response = requests.get(file_url, stream=True, headers=headers, timeout=60)
                 response.raise_for_status()
 
-                # --- MODIFY THIS BLOCK to calculate and emit progress ---
                 total_size = int(response.headers.get('content-length', 0))
                 downloaded_size = 0
                 last_update_time = time.time()
@@ -7560,12 +7762,10 @@ class BunkrDownloadThread(QThread):
                     if os.path.exists(filepath): os.remove(filepath)
                     continue
 
-                # Emit final progress to show 100%
                 if total_size > 0:
                     self.file_progress_signal.emit(filename, (total_size, total_size))
 
                 download_count += 1
-                # --- END MODIFICATION ---
 
             except requests.exceptions.RequestException as e:
                 self.progress_signal.emit(f"   ❌ Failed to download '{filename}'. Error: {e}")
@@ -7576,7 +7776,6 @@ class BunkrDownloadThread(QThread):
                 if os.path.exists(filepath): os.remove(filepath)
                 skip_count += 1
         
-        # Clear the progress label when finished
         self.file_progress_signal.emit("", None)
         self.finished_signal.emit(download_count, skip_count, self.is_cancelled, [])
 
@@ -7603,7 +7802,6 @@ class Hentai2readDownloadThread(QThread):
         self.output_dir = output_dir
         self.pause_event = pause_event
         self.is_cancelled = False
-        # Store the original chapter number to detect single-chapter mode
         self.original_chapter_num = chapter_num
 
     def _check_pause(self):
@@ -7617,7 +7815,6 @@ class Hentai2readDownloadThread(QThread):
         return self.is_cancelled
 
     def run(self):
-        # --- SETUP ---
         is_single_chapter_mode = self.original_chapter_num is not None
 
         self.progress_signal.emit("=" * 40)
@@ -7627,7 +7824,6 @@ class Hentai2readDownloadThread(QThread):
             browser={'browser': 'firefox', 'platform': 'windows', 'desktop': True}
         )
 
-        # --- PHASE 1: FETCH METADATA FOR ALL CHAPTERS ---
         self.progress_signal.emit("--- Phase 1: Fetching metadata for all chapters... ---")
         all_chapters_to_download = []
         chapter_counter = self.start_chapter
@@ -7658,7 +7854,6 @@ class Hentai2readDownloadThread(QThread):
             self.finished_signal.emit(0, 0, True)
             return
 
-        # --- PHASE 2: CALCULATE TOTALS & START DOWNLOAD ---
         if not all_chapters_to_download:
             self.progress_signal.emit("❌ No downloadable chapters found for this series.")
             self.finished_signal.emit(0, 0, self.is_cancelled)
@@ -7744,6 +7939,171 @@ class Hentai2readDownloadThread(QThread):
     def cancel(self):
         self.is_cancelled = True
         self.progress_signal.emit("   Cancellation signal received by Hentai2Read thread.")
+
+class PixeldrainDownloadThread(QThread):
+    """A dedicated QThread for handling pixeldrain.com downloads."""
+    progress_signal = pyqtSignal(str)
+    file_progress_signal = pyqtSignal(str, object)
+    finished_signal = pyqtSignal(int, int, bool) # dl_count, skip_count, cancelled
+
+    def __init__(self, url, output_dir, parent=None):
+        super().__init__(parent)
+        self.pixeldrain_url = url
+        self.output_dir = output_dir
+        self.is_cancelled = False
+
+    def run(self):
+        download_count = 0
+        skip_count = 0
+        self.progress_signal.emit("=" * 40)
+        self.progress_signal.emit(f"🚀 Starting Pixeldrain.com Download for: {self.pixeldrain_url}")
+
+        album_title_raw, files_to_download = fetch_pixeldrain_data(self.pixeldrain_url, self.progress_signal.emit)
+
+        if not files_to_download:
+            self.progress_signal.emit("❌ Failed to extract file information from Pixeldrain. Aborting.")
+            self.finished_signal.emit(0, 0, self.is_cancelled)
+            return
+
+        album_folder_name = clean_folder_name(album_title_raw)
+        album_path = os.path.join(self.output_dir, album_folder_name)
+        try:
+            os.makedirs(album_path, exist_ok=True)
+            self.progress_signal.emit(f"   Saving to folder: '{album_path}'")
+        except OSError as e:
+            self.progress_signal.emit(f"❌ Critical error creating directory: {e}")
+            self.finished_signal.emit(0, len(files_to_download), self.is_cancelled)
+            return
+
+        total_files = len(files_to_download)
+        session = cloudscraper.create_scraper()
+
+        for i, file_data in enumerate(files_to_download):
+            if self.is_cancelled:
+                self.progress_signal.emit("   Download cancelled by user.")
+                skip_count = total_files - download_count
+                break
+
+            filename = file_data.get('filename')
+            file_url = file_data.get('url')
+            filepath = os.path.join(album_path, filename)
+
+            if os.path.exists(filepath):
+                self.progress_signal.emit(f"   -> Skip ({i+1}/{total_files}): '{filename}' already exists.")
+                skip_count += 1
+                continue
+
+            self.progress_signal.emit(f"   Downloading ({i+1}/{total_files}): '{filename}'...")
+
+            try:
+                response = session.get(file_url, stream=True, timeout=90)
+                response.raise_for_status()
+
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded_size = 0
+                last_update_time = time.time()
+
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if self.is_cancelled:
+                            break
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            current_time = time.time()
+                            if total_size > 0 and (current_time - last_update_time) > 0.5:
+                                self.file_progress_signal.emit(filename, (downloaded_size, total_size))
+                                last_update_time = current_time
+
+                if self.is_cancelled:
+                    if os.path.exists(filepath): os.remove(filepath)
+                    continue
+
+                download_count += 1
+            except requests.exceptions.RequestException as e:
+                self.progress_signal.emit(f"   ❌ Failed to download '{filename}'. Error: {e}")
+                if os.path.exists(filepath): os.remove(filepath)
+                skip_count += 1
+
+        self.file_progress_signal.emit("", None)
+        self.finished_signal.emit(download_count, skip_count, self.is_cancelled)
+
+    def cancel(self):
+        self.is_cancelled = True
+        self.progress_signal.emit("   Cancellation signal received by Pixeldrain thread.")
+
+class DriveDownloadThread(QThread):
+    """A dedicated QThread for handling direct Mega, GDrive, and Dropbox links."""
+    # --- MODIFIED: Removed progress_signal, as we will use a direct logger ---
+    file_progress_signal = pyqtSignal(str, object)
+    finished_signal = pyqtSignal(int, int, bool, list)
+    overall_progress_signal = pyqtSignal(int, int)
+
+    # --- MODIFIED: Added logger_func to init ---
+    def __init__(self, url, output_dir, platform, use_post_subfolder, cancellation_event, pause_event, logger_func, parent=None):
+        super().__init__(parent)
+        self.drive_url = url
+        self.output_dir = output_dir
+        self.platform = platform
+        self.use_post_subfolder = use_post_subfolder
+        self.is_cancelled = False
+        self.cancellation_event = cancellation_event
+        self.pause_event = pause_event
+        self.logger_func = logger_func # Use the logger from the main window
+
+    def run(self):
+        # --- MODIFIED: Use self.logger_func directly ---
+        self.logger_func("=" * 40)
+        self.logger_func(f"🚀 Starting direct {self.platform.capitalize()} Download for: {self.drive_url}")
+        
+        try:
+            if self.platform == 'mega':
+                # Pass the logger function down
+                drive_download_mega_file(
+                    self.drive_url, self.output_dir,
+                    logger_func=self.logger_func,
+                    progress_callback_func=self.file_progress_signal.emit,
+                    overall_progress_callback=self.overall_progress_signal.emit,
+                    cancellation_event=self.cancellation_event,
+                    pause_event=self.pause_event
+                )
+            # (Other platforms like gdrive, dropbox, gofile remain the same, they will use the passed logger)
+            elif self.platform == 'gdrive':
+                download_gdrive_file(
+                    self.drive_url, self.output_dir,
+                    logger_func=self.logger_func,
+                    progress_callback_func=self.file_progress_signal.emit,
+                    overall_progress_callback=self.overall_progress_signal.emit,
+                    use_post_subfolder=self.use_post_subfolder,
+                    post_title="Google Drive Download"
+                )
+            elif self.platform == 'dropbox':
+                download_dropbox_file(
+                    self.drive_url, self.output_dir,
+                    logger_func=self.logger_func,
+                    progress_callback_func=self.file_progress_signal.emit,
+                    use_post_subfolder=self.use_post_subfolder,
+                    post_title="Dropbox Download"
+                )
+            elif self.platform == 'gofile':
+                download_gofile_folder(
+                    self.drive_url, self.output_dir,
+                    logger_func=self.logger_func,
+                    progress_callback_func=self.file_progress_signal.emit,
+                    overall_progress_callback=self.overall_progress_signal.emit
+                )
+
+            self.finished_signal.emit(1, 0, self.is_cancelled, [])
+
+        except Exception as e:
+            self.logger_func(f"❌ An unexpected error occurred in DriveDownloadThread: {e}")
+            self.finished_signal.emit(0, 1, self.is_cancelled, [])
+
+    def cancel(self):
+        self.is_cancelled = True
+        if self.cancellation_event:
+            self.cancellation_event.set()
+        self.logger_func(f"   Cancellation signal received by {self.platform.capitalize()} thread.")
 
 class ExternalLinkDownloadThread(QThread):
     """A QThread to handle downloading multiple external links sequentially."""

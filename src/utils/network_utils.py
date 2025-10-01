@@ -1,13 +1,6 @@
-# --- Standard Library Imports ---
 import os
 import re
 from urllib.parse import urlparse
-
-# --- Third-Party Library Imports ---
-# This module might not require third-party libraries directly,
-# but 'requests' is a common dependency for network operations.
-# import requests
-
 
 def parse_cookie_string(cookie_string):
     """
@@ -106,13 +99,11 @@ def prepare_cookies_for_request(use_cookie_flag, cookie_text_input, selected_coo
     if not use_cookie_flag:
         return None
 
-    # Priority 1: Use the specifically browsed file first
     if selected_cookie_file_path and os.path.exists(selected_cookie_file_path):
         cookies = load_cookies_from_netscape_file(selected_cookie_file_path, logger_func, target_domain)
         if cookies:
             return cookies
 
-    # Priority 2: Look for a domain-specific cookie file
     if app_base_dir and target_domain:
         domain_specific_path = os.path.join(app_base_dir, "data", f"{target_domain}_cookies.txt")
         if os.path.exists(domain_specific_path):
@@ -120,7 +111,6 @@ def prepare_cookies_for_request(use_cookie_flag, cookie_text_input, selected_coo
             if cookies:
                 return cookies
 
-    # Priority 3: Look for a generic cookies.txt
     if app_base_dir:
         default_path = os.path.join(app_base_dir, "appdata", "cookies.txt")
         if os.path.exists(default_path):
@@ -128,7 +118,6 @@ def prepare_cookies_for_request(use_cookie_flag, cookie_text_input, selected_coo
             if cookies:
                 return cookies
 
-    # Priority 4: Fall back to manually entered text
     if cookie_text_input:
         cookies = parse_cookie_string(cookie_text_input)
         if cookies:
@@ -159,13 +148,17 @@ def extract_post_info(url_string):
     nhentai_match = re.search(r'nhentai\.net/g/(\d+)', stripped_url)
     if nhentai_match:
         return 'nhentai', nhentai_match.group(1), None
-    
+
     # --- Hentai2Read Check (Updated) ---
-    # This regex now captures the manga slug (id1) and optionally the chapter number (id2)
     hentai2read_match = re.search(r'hentai2read\.com/([^/]+)(?:/(\d+))?/?', stripped_url)
     if hentai2read_match:
         manga_slug, chapter_num = hentai2read_match.groups()
-        return 'hentai2read', manga_slug, chapter_num # chapter_num will be None for series URLs
+        return 'hentai2read', manga_slug, chapter_num
+
+    # --- Pixeldrain Check ---
+    pixeldrain_match = re.search(r'pixeldrain\.com/[lud]/([^/?#]+)', stripped_url)
+    if pixeldrain_match:
+        return 'pixeldrain', stripped_url, None
 
     discord_channel_match = re.search(r'discord\.com/channels/(@me|\d+)/(\d+)', stripped_url)
     if discord_channel_match:
