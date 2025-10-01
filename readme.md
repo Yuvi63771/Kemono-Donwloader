@@ -69,6 +69,61 @@
 <p>This project is under the MIT Licence</p>
 <h2>Star History</h2>
 
+<section aria-labelledby="supported-sites">
+  <h2 id="supported-sites">Supported Sites</h2>
+
+  <h3>Main Platforms</h3>
+  <p>
+    The downloader is primarily built to archive content from the platforms below.
+  </p>
+  <ul>
+    <li>
+      <strong>Kemono &amp; Coomer</strong> — Core supported sites; download posts and files from creators on services such as
+      <em>Patreon, Fanbox, OnlyFans, Fansly</em>, and similar platforms.
+    </li>
+    <li>
+      <strong>Discord</strong> — Two modes for a channel URL:
+      <ul>
+        <li>Download all files and attachments.</li>
+        <li>Save the entire message history as a formatted PDF.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <hr>
+
+  <h3>Specialized Site Support</h3>
+  <p>Paste a link from any of the following and the app will handle the download automatically:</p>
+
+  <details>
+    <summary>Supported specialized sites (click to expand)</summary>
+    <ul>
+      <li>AllPornComic</li>
+      <li>Bunkr</li>
+      <li>Erome</li>
+      <li>Fap-Nation</li>
+      <li>Hentai2Read</li>
+      <li>nhentai</li>
+      <li>Pixeldrain</li>
+      <li>Saint2</li>
+      <li>Toonily</li>
+    </ul>
+  </details>
+
+  <hr>
+
+  <h3>Direct File Hosting</h3>
+  <p>
+    You may paste direct links from these file hosting services to download contents without using the
+    <code>&quot;Only Links&quot;</code> mode:
+  </p>
+  <ul>
+    <li>Dropbox</li>
+    <li>Gofile</li>
+    <li>Google Drive</li>
+    <li>Mega</li>
+  </ul>
+</section>
 
 ### Included Third-Party Tools
 
