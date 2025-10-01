@@ -50,25 +50,6 @@
   <li><strong>Creator Management:</strong> Built-in creator browser and update checker for downloading only new posts from saved profiles.</li>
   <li><strong>Error Handling:</strong> Tracks failed downloads and provides a retry dialog with options to export or redownload missing files.</li>
 </ul>
-<h2>💻 Installation</h2>
-<h3>Requirements</h3>
-<ul>
-  <li>Python 3.6 or higher</li>
-  <li>pip (Python package installer)</li>
-</ul>
-<h3>Install Dependencies</h3>
-<pre><code>pip install PyQt5 requests cloudscraper Pillow fpdf2 python-docx
-</code></pre>
-<h3>Running the Application</h3>
-<p>Navigate to the application's directory in your terminal and run:</p>
-<pre><code>python main.py
-</code></pre>
-<h2>Contribution</h2>
-<p>Feel free to fork this repo and submit pull requests for bug fixes, new features, or UI improvements!</p>
-<h2>License</h2>
-<p>This project is under the MIT Licence</p>
-<h2>Star History</h2>
-
 <section aria-labelledby="supported-sites">
   <h2 id="supported-sites">Supported Sites</h2>
 
@@ -125,6 +106,23 @@
   </ul>
 </section>
 
+<h2>💻 Installation</h2>
+<h3>Requirements</h3>
+<ul>
+  <li>Python 3.6 or higher</li>
+  <li>pip (Python package installer)</li>
+</ul>
+<h3>Install Dependencies</h3>
+<pre><code>pip install PyQt5 requests cloudscraper Pillow fpdf2 python-docx
+</code></pre>
+<h3>Running the Application</h3>
+<p>Navigate to the application's directory in your terminal and run:</p>
+<pre><code>python main.py
+</code></pre>
+<h2>Contribution</h2>
+<p>Feel free to fork this repo and submit pull requests for bug fixes, new features, or UI improvements!</p>
+<h2>License</h2>
+<p>This project is under the MIT Licence</p>
 ### Included Third-Party Tools
 
 This project includes a pre-compiled binary of `yt-dlp` for handling certain video downloads. `yt-dlp` is in the public domain. For more information or to get the latest version, please visit the official [yt-dlp GitHub repository](https://github.com/yt-dlp/yt-dlp).
