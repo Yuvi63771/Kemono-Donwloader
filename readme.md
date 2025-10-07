@@ -88,6 +88,10 @@
       <li>Pixeldrain</li>
       <li>Saint2</li>
       <li>Toonily</li>
+      <li>danbooru</li>
+      <li>Mangadex</li>
+      <li>Simpcity</li>
+
     </ul>
   </details>
 
