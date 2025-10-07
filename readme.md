@@ -91,7 +91,6 @@
       <li>danbooru</li>
       <li>Mangadex</li>
       <li>Simpcity</li>
-
     </ul>
   </details>
 
